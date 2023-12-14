@@ -38,9 +38,9 @@ class AlphaStrategy(FutureBaseStrategy):
 
         # 确定票池
         if self.exchange == "bn":
-            pattern = re.compile(r'\w{2,10}USDT')
+            pattern = re.compile(r'\w{1,10}USDT')
         elif self.exchange == "okex":
-            pattern = re.compile(r'\w{2,10}-USDT-SWAP')
+            pattern = re.compile(r'\w{1,10}-USDT-SWAP')
         self.future_symbol_list = pattern.findall(self.Parser.get(section ="strategy" ,option="future_symbol_list"))
         self.STLogger.critical(f"Trading Future Target: {self.future_symbol_list}")
         self.spot_symbol_list = pattern.findall(self.Parser.get(section ="strategy" ,option="spot_symbol_list"))
@@ -370,6 +370,14 @@ class AlphaStrategy(FutureBaseStrategy):
         exp_long_VolStyle = np.nansum([long_val_res[x] * Vol24HDict[x] for x in self.future_symbol_list]) / TargetHoldingVal_Long
         exp_short_VolStyle = np.nansum([short_val_res[x] * Vol24HDict[x] for x in self.future_symbol_list]) / TargetHoldingVal_Short
 
+        # 计算因子值
+        scoreDict = TradingSignal.to_dict()
+        for symbol in self.future_symbol_list:
+            if symbol not in scoreDict.keys():
+                scoreDict[symbol] = np.nan
+        exp_long_score = np.nansum([long_val_res[x] * scoreDict[x] for x in self.future_symbol_list]) / TargetHoldingVal_Long
+        exp_short_score = np.nansum([short_val_res[x] * scoreDict[x] for x in self.future_symbol_list]) / TargetHoldingVal_Short
+
         if (exp_long_VolStyle - exp_short_VolStyle) > self.Vol24HExpThres:
             self.StyleControlTS = nowTS
             self.STLogger.critical(f"StyleControlMsg#Type:LS24HVolGap#TS:{nowTS}#MarketMedian:{MarketMedianVol24H}#LongVol24H:{exp_long_VolStyle}#ShortVol24H:{exp_short_VolStyle}")
@@ -413,7 +421,7 @@ class AlphaStrategy(FutureBaseStrategy):
         if not self.local_test:
             # 实盘的时候从其他地方获取
             drawdown = self.drawdown
-        self.STLogger.critical(f"StyleMsg#TS:{nowTS}#24Hdd:{drawdown}#1Hdd:{drawdown1h}#ExpLongNum:{ExpLongNum}#ExpShortNum:{ExpShortNum}#MarketRtn:{MarketMeanRtn24H}#MarketMedianVol:{MarketMedianVol24H}#LongVol24H:{exp_long_VolStyle}#ShortVol24H:{exp_short_VolStyle}#LongMOM24H:{exp_long_RtnStyle}#ShortMOM24H:{exp_short_RtnStyle}")
+        self.STLogger.critical(f"StyleMsg#TS:{nowTS}#24Hdd:{drawdown}#1Hdd:{drawdown1h}#ExpLongNum:{ExpLongNum}#ExpShortNum:{ExpShortNum}#MarketRtn:{MarketMeanRtn24H}#MarketMedianVol:{MarketMedianVol24H}#LongVol24H:{exp_long_VolStyle}#ShortVol24H:{exp_short_VolStyle}#LongMOM24H:{exp_long_RtnStyle}#ShortMOM24H:{exp_short_RtnStyle}#LongScore:{exp_long_score}#ShortScore:{exp_short_score}")
 
         if (drawdown > self.Max24HDDBlackThres) or (drawdown1h > self.Max1HDDBlackThres):
             self.MaxDDTS = nowTS
@@ -892,7 +900,7 @@ class AlphaStrategy(FutureBaseStrategy):
                 temp_quantity = self.round_quantity(holding_symbol, np.minimum(long_vol_res[holding_symbol], self.EachChanceVal / temp_price))
                 temp_quantity = np.maximum(temp_quantity, self.ContractInfo[holding_symbol]['limit_min_qunatity'])
                 self.TradingPlan["Close"]["LONG"][nowTS][holding_symbol] += temp_quantity
-                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{holding_symbol}#direction:Close#pside:LONG#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[holding_symbol]}#PosPct:{long_pct_res[holding_symbol]}#Gap{Gap}#Predict:{GlobalPredDict[holding_symbol]}")
+                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{holding_symbol}#direction:Close#pside:LONG#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[holding_symbol]}#PosPct:{long_pct_res[holding_symbol]}#Gap:{Gap}#Predict:{GlobalPredDict[holding_symbol]}")
 
                 # if self.local_test:
                 #     self.creat_backtest_virtual_order("Close", "LONG", holding_symbol, temp_quantity, future_twap[holding_symbol])
@@ -902,7 +910,7 @@ class AlphaStrategy(FutureBaseStrategy):
                 temp_quantity = self.round_quantity(global_symbol,self.EachChanceVal / temp_price)
                 temp_quantity = np.maximum(temp_quantity, self.ContractInfo[global_symbol]['limit_min_qunatity'])
                 self.TradingPlan["Open"]["LONG"][nowTS][global_symbol] += temp_quantity
-                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{global_symbol}#direction:Open#pside:LONG#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[global_symbol]}#PosPct:{long_pct_res[global_symbol]}#Gap{Gap}#Predict:{GlobalPredDict[global_symbol]}")
+                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{global_symbol}#direction:Open#pside:LONG#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[global_symbol]}#PosPct:{long_pct_res[global_symbol]}#Gap:{Gap}#Predict:{GlobalPredDict[global_symbol]}")
                 # if self.local_test:
                 #     self.creat_backtest_virtual_order("Open", "LONG", global_symbol, temp_quantity, future_twap[global_symbol])
 
@@ -938,7 +946,7 @@ class AlphaStrategy(FutureBaseStrategy):
                 temp_quantity = self.round_quantity(holding_symbol,np.minimum(-short_vol_res[holding_symbol], self.EachChanceVal / temp_price))
                 temp_quantity = np.maximum(temp_quantity, self.ContractInfo[holding_symbol]['limit_min_qunatity'])
                 self.TradingPlan["Close"]["SHORT"][nowTS][holding_symbol] += temp_quantity
-                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{holding_symbol}#direction:Close#pside:SHORT#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[holding_symbol]}#PosPct:{short_pct_res[holding_symbol]}#Gap{Gap}#Predict:{GlobalPredDict[holding_symbol]}")
+                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{holding_symbol}#direction:Close#pside:SHORT#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[holding_symbol]}#PosPct:{short_pct_res[holding_symbol]}#Gap:{Gap}#Predict:{GlobalPredDict[holding_symbol]}")
 
                 # if self.local_test:
                 #     self.creat_backtest_virtual_order("Close", "SHORT", holding_symbol, temp_quantity, future_twap[holding_symbol])
@@ -948,7 +956,7 @@ class AlphaStrategy(FutureBaseStrategy):
                 temp_quantity = self.round_quantity(global_symbol,self.EachChanceVal / temp_price)
                 temp_quantity = np.maximum(temp_quantity, self.ContractInfo[global_symbol]['limit_min_qunatity'])
                 self.TradingPlan["Open"]["SHORT"][nowTS][global_symbol] += temp_quantity
-                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{global_symbol}#direction:Open#pside:SHORT#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[global_symbol]}#PosPct:{short_pct_res[global_symbol]}#Gap{Gap}#Predict:{GlobalPredDict[global_symbol]}")
+                self.STLogger.critical(f"AlpMsg#Type:ChgPos#TS:{nowTS}#symbol:{global_symbol}#direction:Open#pside:SHORT#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[global_symbol]}#PosPct:{short_pct_res[global_symbol]}#Gap:{Gap}#Predict:{GlobalPredDict[global_symbol]}")
 
                 # if self.local_test:
                 #     self.creat_backtest_virtual_order("Open", "SHORT", global_symbol, temp_quantity, future_twap[global_symbol])

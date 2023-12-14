@@ -237,23 +237,25 @@ def get_prepared_kline_from_basic_data(start_date, end_date, spot_symbol_list = 
         future_data_dict = pd.read_pickle(os.path.join(basic_data_path, f"future_data_dict_{exchange}.pkl"))
 
     start_time = ds.convert_date_to_timestamp(start_date)
+    data_start_time = ds.convert_date_to_timestamp(start_date) - 24 * 60 * 60000
     end_time = ds.convert_date_to_timestamp(end_date) + 24 * 60 * 60000 - 1
 
     if exchange in ["bn"]:
         if spot_symbol_list is None:
             spot_symbol_list = spot_data_dict["open_time"].columns.tolist()
         for key in spot_data_dict.keys():
-            spot_data_dict[key] = spot_data_dict[key].loc[start_time:end_time, spot_symbol_list]
+            spot_data_dict[key] = spot_data_dict[key].loc[data_start_time:end_time, spot_symbol_list]
 
-    if future_symbol_list is None:
-        future_symbol_list = future_data_dict["open_time"].columns.tolist()
-    for key in future_data_dict.keys():
-        future_data_dict[key] = future_data_dict[key].loc[start_time:end_time, future_symbol_list]
+        if future_symbol_list is None:
+            future_symbol_list = future_data_dict["open_time"].columns.tolist()
+        for key in future_data_dict.keys():
+            future_data_dict[key] = future_data_dict[key].loc[data_start_time:end_time, future_symbol_list]
 
     future_data_dict['trade_value_sum30min'] = future_data_dict["trade_value"].rolling(30, min_periods=1).sum()
     future_data_dict['trade_value_sum5min'] = future_data_dict["trade_value"].rolling(5, min_periods=1).sum()
 
     future_data_dict['Rtn1'] = (future_data_dict["close"] / future_data_dict["close"].shift(1) - 1)
+    future_data_dict['Rtn1'] = future_data_dict['Rtn1'].where(future_data_dict['Rtn1'] < 1, 0)
     future_data_dict['Rtn5'] = (future_data_dict["close"] / future_data_dict["close"].shift(5) - 1)
     future_data_dict['Rtn1440'] = (future_data_dict["close"] / future_data_dict["close"].shift(1440) - 1)
     index = (future_data_dict['Rtn1'].mean(axis=1).fillna(0)+1).cumprod()
@@ -266,12 +268,13 @@ def get_prepared_kline_from_basic_data(start_date, end_date, spot_symbol_list = 
     future_data_dict['Market24HRtn'].columns = future_symbol_list
 
     future_data_dict['Vol24H'] = (future_data_dict["high"].rolling(1440).max() - future_data_dict["low"].rolling(1440).min()) / ((future_data_dict["high"].rolling(1440).max() + future_data_dict["low"].rolling(1440).min())/2)
-    # tmp = pd.DataFrame(future_data_dict['Vol24H']["BTCUSDT"])
-    # future_data_dict['BTC24HVol'] = pd.concat([tmp for x in range(len(future_symbol_list))],axis=1)
-    # future_data_dict['BTC24HVol'].columns = future_symbol_list
-    # tmp = future_data_dict["close"]["BTCUSDT"] / future_data_dict["close"]["BTCUSDT"].shift(1440) - 1
-    # future_data_dict['BTC24HRtn'] = pd.concat([tmp for x in range(len(future_symbol_list))],axis=1)
-    # future_data_dict['BTC24HRtn'].columns = future_symbol_list
+
+    if exchange in ["bn"]:
+        for key in spot_data_dict.keys():
+            spot_data_dict[key] = spot_data_dict[key].loc[start_time:end_time, spot_symbol_list]
+
+        for key in future_data_dict.keys():
+            future_data_dict[key] = future_data_dict[key].loc[start_time:end_time, future_symbol_list]
 
     return spot_data_dict, future_data_dict
 
@@ -284,6 +287,7 @@ def read_trading_log(LogPath, my_pid=None):
     res3 = []
     res4 = []
     res5 = []
+    res6 = []
     with open(LogPath) as file:
         for line in file.readlines():
             split_res = line.split("\n")[0].split(" - ")
@@ -342,7 +346,13 @@ def read_trading_log(LogPath, my_pid=None):
                         tmp_dict["pid"] = pid
                     res5.append(tmp_dict)
 
-
+                if (msg[:6] == "AlpMsg") and ("ChgPos" in msg):
+                    tmp_dict = {}
+                    for x in msg[7:].split("#"):
+                        tmp_res = x.split(":")
+                        tmp_dict[tmp_res[0]] = tmp_res[1]
+                        tmp_dict["pid"] = pid
+                    res6.append(tmp_dict)
 
     Accdf = pd.DataFrame(res1)
     Accdf["AccNetVal"] = Accdf["AccNetVal"].astype(float)
@@ -364,6 +374,14 @@ def read_trading_log(LogPath, my_pid=None):
     Tradedf['Quantity'] = Tradedf['Quantity'].astype(float)
     Tradedf['Val'] = Tradedf['Price'] * Tradedf['Quantity']
     Tradedf['Date'] = Tradedf['TS'].apply(lambda x: ds.convert_timestamp_to_utctime(x)[:10])
+
+    Chgposdf = pd.DataFrame(res6)
+    Chgposdf['TS'] = Chgposdf['TS'].astype(int)
+    Chgposdf['Vol'] = Chgposdf['Vol'].astype(float)
+    Chgposdf['Quotes'] = Chgposdf['Quotes'].astype(float)
+    Chgposdf['Val'] = Chgposdf['Vol']* Chgposdf['Quotes']
+    Chgposdf['Predict'] = Chgposdf['Predict'].astype(float)
+    Chgposdf['Gap'] = Chgposdf['Gap'].astype(float)
 
     try:
         Styledf = pd.DataFrame(res3)
@@ -392,7 +410,8 @@ def read_trading_log(LogPath, my_pid=None):
     else:
         Other = {
             "Style":Styledf,
-            "Stop": pd.DataFrame(res5)
+            "Stop": pd.DataFrame(res5),
+            "Chg":Chgposdf,
         }
     return Capital_t0, Accdf, Tradedf, Other
 
@@ -414,6 +433,7 @@ def plot_strategy_backtest(Capital_t0, Accdf, Tradedf, Other):
     DaySampleNum = int(1440 / freq)
     Accdf["24Hdd"] = (Accdf["AccNetVal"].rolling(DaySampleNum).max() - Accdf["AccNetVal"]) / Capital_t0
     Accdf["1Hdd"] = (Accdf["AccNetVal"].rolling(int(DaySampleNum/24)).max() - Accdf["AccNetVal"]) / Capital_t0
+    Accdf['mth'] = Accdf['Date'].map(lambda x: x[:7])
 
     tmp_dd = Accdf.groupby("day").agg({"24Hdd": "max","1Hdd":"max"})
     dd24h_001 = (tmp_dd["24Hdd"] > 0.01).mean()
@@ -447,6 +467,13 @@ def plot_strategy_backtest(Capital_t0, Accdf, Tradedf, Other):
     LSVolStyle = voldiff.mean() / voldiff.abs().std()
     LSMomStyle = momdiff.mean() / momdiff.abs().std()
 
+    # 计算按月收益率
+    mthDf = Accdf.groupby("mth").agg({"AccNetVal": ["first", "last", "count"]})
+    mthDf.columns = ["first", "last", "count"]
+    mthDf['DateNum'] = mthDf["count"] // 1440
+    mthDf = mthDf[mthDf['count'] > 5]
+    mthDf['Rtn'] = (mthDf['last'] - mthDf['first']) / Capital_t0
+
     res = {
         "AnnRtn": AnnRtn,
         "DailyStd": DailyStd,
@@ -468,6 +495,7 @@ def plot_strategy_backtest(Capital_t0, Accdf, Tradedf, Other):
         "LSMomStyle":LSMomStyle,
         "consecutive_dd":consecutive_dd,
         "consecutive_dd_day":dd_time,
+        "MthReport":mthDf[['DateNum','Rtn']].to_dict()
     }
     print(res)
     print("Drawdown 0.025 dates",sorted(list(set(tmp_dd["24Hdd"][tmp_dd["24Hdd"] > 0.025].index.tolist()))))
@@ -500,11 +528,22 @@ def plot_strategy_backtest(Capital_t0, Accdf, Tradedf, Other):
     ax.set_title('最大持仓比例', size=15)
 
     ax = fig.add_subplot(spec[2, 0:12])
-
     plt.plot(TotalTrade.index, TotalTrade / 2 / Capital_t0)
     ax.set_title('交易换手率', size=15)
     ax_num = np.maximum(int(TotalTrade.shape[0] / 10),1)
     ax.xaxis.set_major_locator(ticker.MultipleLocator(ax_num))
+
+    ax = fig.add_subplot(spec[3, 0:12])
+    mth_index = mthDf.index.tolist()
+    y = mthDf["Rtn"].tolist()
+    x = np.arange(len(mth_index))  # the label locations
+    width = 0.25
+    rects = ax.bar(x,y,width)
+    ax.bar_label(rects, padding=3)
+    ax.set_xticks(x, mth_index)
+    # plt.plot(mthDf["Rtn"])
+    ax.set_title('按月收益率', size=15)
+
     plt.show()
 
     return res

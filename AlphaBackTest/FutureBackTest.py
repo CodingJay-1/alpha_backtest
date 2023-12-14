@@ -37,6 +37,7 @@ class FutureBaseStrategy():
         if quantity ==0:
             print(side,positionSide,symbol,quantity,price)
             print("Order Error: Quantity == 0, Order Rej")
+            raise Exception("Order Error: Quantity = 0, Order Rej")
             return
         elif quantity <0:
             raise Exception("Order Error: Quantity < 0, Order Rej")
