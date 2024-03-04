@@ -64,6 +64,12 @@ class AlphaStrategy(FutureBaseStrategy):
         self.TradingRatioUpThres100w = float(self.Parser.get(section="strategy", option="TradingRatioUpThres100w"))
         self.TradingRatioUpThres = (self.TargetHoldingVal["LONG"] + np.abs(self.TargetHoldingVal["SHORT"])) / 1000000 * self.TradingRatioUpThres100w
 
+        self.factor_rank = str(self.Parser.get(section ="strategy" ,option="factor_rank"))
+        if self.factor_rank == "True":
+            self.factor_rank = True
+        else:
+            self.factor_rank = False
+
         # 设定资金使用情况
         self.EachChanceVal = float(self.Parser.get(section ="strategy" ,option="EachChanceValue"))
         self.SmallValToClean = float(self.Parser.get(section ="strategy" ,option="SmallValToClean"))
@@ -82,9 +88,6 @@ class AlphaStrategy(FutureBaseStrategy):
         self.Symbol24HVolThresIn = float(self.Parser.get(section ="strategy" ,option="Symbol24HVolThresIn"))
         self.Symbol24HVolThresOut = float(self.Parser.get(section ="strategy" ,option="Symbol24HVolThresOut"))
         self.SymbolBlackThres = int(self.Parser.get(section ="strategy" ,option="SymbolBlackThres"))
-        self.Vol24HExpThres = float(self.Parser.get(section ="strategy" ,option="Vol24HExpThres"))
-        self.StyleControlTime = 6 * 60
-        self.StyleControlTS = 0
         self.Black24HVolSymbols = []
         self.SymbolBlack = False
 
@@ -292,12 +295,20 @@ class AlphaStrategy(FutureBaseStrategy):
         Alphas = (Rtns - Rtns.where(TradingStatus).mean()).to_dict()
 
         # 计算当前因子值
-        TradingSignal = trading_signal_dict[self.alpha_name_list[0]].iloc[-1, :]
-        for idx, alpha_name in enumerate(self.alpha_name_list):
-            if idx ==0:
-                continue
-            TradingSignal += trading_signal_dict[self.alpha_name_list[idx]].iloc[-1, :]
-        TradingSignal = (TradingSignal / len(self.alpha_name_list)).where(TradingStatus)
+        if not self.factor_rank:
+            TradingSignal = trading_signal_dict[self.alpha_name_list[0]].iloc[-1, :]
+            for idx, alpha_name in enumerate(self.alpha_name_list):
+                if idx ==0:
+                    continue
+                TradingSignal += trading_signal_dict[self.alpha_name_list[idx]].iloc[-1, :]
+            TradingSignal = (TradingSignal / len(self.alpha_name_list)).where(TradingStatus)
+        else:
+            TradingSignal = trading_signal_dict[self.alpha_name_list[0]].iloc[-1, :].where(TradingStatus).rank(pct=True)
+            for idx, alpha_name in enumerate(self.alpha_name_list):
+                if idx ==0:
+                    continue
+                TradingSignal += trading_signal_dict[self.alpha_name_list[idx]].iloc[-1, :].where(TradingStatus).rank(pct=True)
+            TradingSignal = (TradingSignal / len(self.alpha_name_list)).where(TradingStatus)
 
         SignalNaList = TradingStatus.loc[TradingStatus & (TradingSignal.isna())].index.tolist()
         TradingStatus = TradingStatus & (~TradingSignal.isna())
@@ -373,14 +384,6 @@ class AlphaStrategy(FutureBaseStrategy):
                 scoreDict[symbol] = np.nan
         exp_long_score = np.nansum([long_val_res[x] * scoreDict[x] for x in self.future_symbol_list]) / TargetHoldingVal_Long
         exp_short_score = np.nansum([short_val_res[x] * scoreDict[x] for x in self.future_symbol_list]) / TargetHoldingVal_Short
-
-        if (exp_long_VolStyle - exp_short_VolStyle) > self.Vol24HExpThres:
-            self.StyleControlTS = nowTS
-            self.STLogger.critical(f"StyleControlMsg#Type:LS24HVolGap#TS:{nowTS}#MarketMedian:{MarketMedianVol24H}#LongVol24H:{exp_long_VolStyle}#ShortVol24H:{exp_short_VolStyle}")
-
-        elif (exp_short_VolStyle - exp_long_VolStyle) > self.Vol24HExpThres:
-            self.StyleControlTS = nowTS
-            self.STLogger.critical(f"StyleControlMsg#Type:LS24HVolGap#TS:{nowTS}#MarketMedian:{MarketMedianVol24H}#LongVol24H:{exp_long_VolStyle}#ShortVol24H:{exp_short_VolStyle}")
 
         Rtn24HDict = InfoDict["Rtn1440"].to_dict()
         exp_long_RtnStyle = np.nansum([long_val_res[x] * Rtn24HDict[x] for x in self.future_symbol_list]) / TargetHoldingVal_Long
@@ -544,15 +547,9 @@ class AlphaStrategy(FutureBaseStrategy):
             cond2 = (long_pct_res[symbol] < self.MaxCapRatio)
             cond3 = ((nowTS - self.LatestStopLossTimeStamp[symbol]["LONG"]) > self.StopLossTimeInterval * 60000)
             cond4 = (symbol not in total_banned_symbols)
-            # 增加风格过滤条件
             cond5 = True
             cond6 = True
             cond7 = not TradingRatioLimit[symbol]['buy']
-            if (self.StyleControlTS >0) and ((nowTS - self.StyleControlTS) < self.StyleControlTime * 60000):
-                if (exp_long_VolStyle > MarketMedianVol24H + 0.0) and (Vol24HDict[symbol] > MarketMedianVol24H):
-                    cond5 = False
-                if (exp_long_VolStyle < MarketMedianVol24H - 0.0) and (Vol24HDict[symbol] < MarketMedianVol24H):
-                    cond6 = False
 
             if cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7: # 在交易，并且还没有达到最大值，并且已经脱离止损时间
                 LongGlobalMatchTimes[symbol] = 1
@@ -578,12 +575,6 @@ class AlphaStrategy(FutureBaseStrategy):
             cond5 = True
             cond6 = True
             cond7 = not TradingRatioLimit[symbol]['sell']
-            # 增加风格过滤条件
-            if (self.StyleControlTS >0) and ((nowTS - self.StyleControlTS) < self.StyleControlTime * 60000):
-                if (exp_short_VolStyle > MarketMedianVol24H + 0.0) and (Vol24HDict[symbol] > MarketMedianVol24H):
-                    cond5 = False
-                if (exp_short_VolStyle < MarketMedianVol24H - 0.0) and (Vol24HDict[symbol] < MarketMedianVol24H):
-                    cond6 = False
 
             if cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7:
                 ShortGlobalMatchTimes[symbol] = 1
@@ -984,23 +975,6 @@ class AlphaStrategy(FutureBaseStrategy):
                 self.STLogger.critical(f"AlpMsg#Type:Black#TS:{nowTS}#symbol:{symbol}#direction:Close#pside:SHORT#Vol:{temp_short_quantity}#Quotes:{self.LatestMinQuotes[symbol]}")
                 # if self.local_test:
                 #     self.creat_backtest_virtual_order("Close", "SHORT", symbol, temp_short_quantity, future_twap[symbol])
-
-        # 第5.5步 风格控制
-        if (exp_long_VolStyle - exp_short_VolStyle) > self.Vol24HExpThres:
-            # 清仓多头最高波动
-            LongLargeVolSymbol = Vol24H.loc[LongHoldingList].sort_values(ascending=False).index.tolist()[0]
-            temp_quantity = long_vol_res[LongLargeVolSymbol]
-            self.TradingPlan["Close"]["LONG"][nowTS][LongLargeVolSymbol] = temp_quantity
-            self.STLogger.critical(
-                f"AlpMsg#Type:StyleControl#TS:{nowTS}#symbol:{LongLargeVolSymbol}#direction:Close#pside:LONG#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[LongLargeVolSymbol]}")
-
-        if (exp_short_VolStyle - exp_long_VolStyle) > self.Vol24HExpThres:
-            # 清仓多头最高波动
-            ShortLargeVolSymbol = Vol24H.loc[ShortHoldingList].sort_values(ascending=False).index.tolist()[0]
-            temp_quantity = -short_vol_res[ShortLargeVolSymbol]
-            self.TradingPlan["Close"]["SHORT"][nowTS][ShortLargeVolSymbol] = temp_quantity
-            self.STLogger.critical(
-                f"AlpMsg#Type:StyleControl#TS:{nowTS}#symbol:{ShortLargeVolSymbol}#direction:Close#pside:SHORT#Vol:{temp_quantity}#Quotes:{self.LatestMinQuotes[ShortLargeVolSymbol]}")
 
 
         # 第6步 核查Close部分的交易不能超过预期持有的vol
